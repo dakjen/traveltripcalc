@@ -25,6 +25,8 @@
 <body>
   <div id="root"></div>
 
+  <!-- html2pdf for real PDF generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <!-- React + Babel via CDN — no build step needed -->
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -733,15 +735,17 @@
     </body>
     </html>`;
     
-      const blob = new Blob([html], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${tripName.replace(/\s+/g, "-")}-trip-plan.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const opt = {
+        margin:       0.5,
+        filename:     `${tripName.replace(/\s+/g, "-")}-trip-plan.pdf`,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#0a0a0a' },
+        jsPDF:        { unit: 'in', format: 'letter', orientation: 'landscape' }
+      };
+      
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      html2pdf().set(opt).from(container).save();
     }
     
     // ─── TRIP TOTALS ──────────────────────────────────────────────────────────────
