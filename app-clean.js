@@ -1,0 +1,1104 @@
+
+const CATEGORIES = ["Flights", "Hotel", "Car", "Food", "Activities", "Other"];
+
+const CAT_COLORS = {
+  Flights:    { bg: "#1e3a5f", border: "#3b82f6", text: "#93c5fd" },
+  Hotel:      { bg: "#3b1f1f", border: "#ef4444", text: "#fca5a5" },
+  Car:        { bg: "#2d2a1a", border: "#eab308", text: "#fde68a" },
+  Food:       { bg: "#1a2d1a", border: "#22c55e", text: "#86efac" },
+  Activities: { bg: "#2a1f3b", border: "#a855f7", text: "#d8b4fe" },
+  Other:      { bg: "#1f2a2a", border: "#14b8a6", text: "#5eead4" },
+};
+
+const GROUP_LANE_COLORS = ["#a3e635", "#67e8f9", "#f97316", "#e879f9", "#fb923c"];
+
+// Category-specific brand options
+const CAT_BRANDS = {
+  Flights: [
+    { name: "Delta",     color: "#E31837" },
+    { name: "United",    color: "#005DAA" },
+    { name: "American",  color: "#B11A2D" },
+    { name: "Southwest", color: "#304CB2" },
+    { name: "JetBlue",   color: "#003876" },
+    { name: "Alaska",    color: "#01426A" },
+    { name: "Spirit",    color: "#FFC425" },
+    { name: "Frontier",  color: "#007A33" },
+    { name: "Other",     color: "#555" },
+  ],
+  Hotel: [
+    { name: "Hilton",    color: "#003087" },
+    { name: "Marriott",  color: "#8B1A1A" },
+    { name: "Hyatt",     color: "#6B3FA0" },
+    { name: "IHG",       color: "#006747" },
+    { name: "Wyndham",   color: "#005B94" },
+    { name: "Choice",    color: "#C8102E" },
+    { name: "Airbnb",    color: "#FF5A5F" },
+    { name: "Other",     color: "#555" },
+  ],
+  Car: [
+    { name: "Enterprise",color: "#007A33" },
+    { name: "Hertz",     color: "#FFD700" },
+    { name: "Avis",      color: "#CC0000" },
+    { name: "Budget",    color: "#E87722" },
+    { name: "National",  color: "#007A33" },
+    { name: "Alamo",     color: "#0057A8" },
+    { name: "Turo",      color: "#19A8FC" },
+    { name: "Other",     color: "#555" },
+  ],
+  Food: [
+    { name: "Restaurant",color: "#22c55e" },
+    { name: "Uber Eats", color: "#06C167" },
+    { name: "DoorDash",  color: "#FF3008" },
+    { name: "Groceries", color: "#84cc16" },
+    { name: "Other",     color: "#555" },
+  ],
+  Activities: [
+    { name: "Tours",     color: "#a855f7" },
+    { name: "Viator",    color: "#7c3aed" },
+    { name: "Tickets",   color: "#9333ea" },
+    { name: "Sports",    color: "#6d28d9" },
+    { name: "Other",     color: "#555" },
+  ],
+  Other: [
+    { name: "Other",     color: "#14b8a6" },
+  ],
+};
+
+// Flat brand color lookup for badges
+const BRAND_COLOR_MAP = {};
+Object.values(CAT_BRANDS).flat().forEach(b => { BRAND_COLOR_MAP[b.name] = b.color; });
+
+const uid = () => Math.random().toString(36).slice(2, 8);
+
+const defaultRow = (category = "Hotel") => ({
+  id: uid(), label: "", category,
+  cash: "", points: "", brand: "",
+  startDate: "", endDate: "",
+});
+
+const defaultGroup = (name = "Option A") => ({
+  id: uid(),
+  name,
+  rows: [defaultRow("Flights"), defaultRow("Hotel"), defaultRow("Food")],
+});
+
+const fmt = (n) => n === 0 ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+const parsedNum = (v) => { const n = parseFloat(String(v).replace(/,/g, "")); return isNaN(n) ? 0 : n; };
+
+const toDay = (dateStr) => dateStr ? new Date(dateStr + "T00:00:00").getTime() : null;
+const nightsBetween = (start, end) => {
+  const s = toDay(start), e = toDay(end);
+  if (!s || !e || e <= s) return 1;
+  return Math.round((e - s) / 86400000);
+};
+const rowNights = (row) => {
+  if (row.startDate && row.endDate) return Math.max(nightsBetween(row.startDate, row.endDate), 1);
+  return 1;
+};
+const rowCashTotal = (row) => parsedNum(row.cash) * rowNights(row);
+const rowPtsTotal = (row) => parsedNum(row.points) * rowNights(row);
+
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
+  useEffect(() => {
+    const h = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return isMobile;
+};
+
+// ─── TIMELINE ─────────────────────────────────────────────────────────────────
+
+function Timeline({ groups, isMobile }) {
+  // Collect all dates across all groups to find global min/max
+  const allDates = [];
+  groups.forEach(g => g.rows.forEach(r => {
+    if (r.startDate) allDates.push(toDay(r.startDate));
+    if (r.endDate) allDates.push(toDay(r.endDate));
+  }));
+
+  const hasDates = allDates.length > 0;
+  const globalMin = hasDates ? Math.min(...allDates) : null;
+  const globalMax = hasDates ? Math.max(...allDates) : null;
+  const totalDays = hasDates ? Math.max(Math.round((globalMax - globalMin) / 86400000), 1) : 0;
+
+  // Build lane data — for groups with no dates, fall back to sequential blocks
+  const laneData = groups.map((g, gi) => {
+    const segments = g.rows
+      .filter(r => r.label || r.startDate || r.endDate || parsedNum(r.cash) || parsedNum(r.points))
+      .map(r => {
+        const nights = rowNights(r);
+        let leftPct = 0, widthPct = 100 / Math.max(g.rows.length, 1);
+        if (hasDates && r.startDate && r.endDate) {
+          const s = toDay(r.startDate);
+          const e = toDay(r.endDate);
+          leftPct = ((s - globalMin) / (globalMax - globalMin)) * 100;
+          widthPct = ((e - s) / (globalMax - globalMin)) * 100;
+        }
+        return {
+          label: r.label || r.category,
+          category: r.category,
+          nights,
+          cash: rowCashTotal(r),
+          pts: rowPtsTotal(r),
+          brand: r.brand,
+          startDate: r.startDate,
+          endDate: r.endDate,
+          leftPct,
+          widthPct: Math.max(widthPct, 2),
+        };
+      });
+    return { name: g.name, color: GROUP_LANE_COLORS[gi % GROUP_LANE_COLORS.length], segments };
+  });
+
+  const hasAnySegments = laneData.some(l => l.segments.length > 0);
+  if (!hasAnySegments) return null;
+
+  const LANE_H = isMobile ? 42 : 50;
+  const GAP = 10;
+
+  // Date ruler labels
+  const rulerLabels = [];
+  if (hasDates && totalDays > 0) {
+    const steps = Math.min(totalDays, isMobile ? 5 : 10);
+    for (let i = 0; i <= steps; i++) {
+      const pct = (i / steps) * 100;
+      const dayOffset = Math.round((i / steps) * totalDays);
+      const d = new Date(globalMin + dayOffset * 86400000);
+      rulerLabels.push({
+        pct,
+        label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      });
+    }
+  }
+
+  return (
+    <div className="timeline-block" style={{
+      background: "rgba(255,255,255,0.02)",
+      border: "1px solid rgba(255,255,255,0.09)",
+      borderRadius: 14,
+      padding: isMobile ? "14px 12px 12px" : "18px 18px 14px",
+      marginBottom: 16,
+    }}>
+      <div style={{ color: "#555", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 12 }}>
+        Trip Timeline
+      </div>
+
+      {/* Date ruler */}
+      {hasDates && (
+        <div style={{ position: "relative", height: 18, marginBottom: 8 }}>
+          {rulerLabels.map((rl, i) => (
+            <div key={i} style={{
+              position: "absolute", left: `${rl.pct}%`,
+              transform: rl.pct > 90 ? "translateX(-100%)" : rl.pct > 5 ? "translateX(-50%)" : "translateX(0)",
+              fontSize: 8, color: "#444", letterSpacing: 0.3, whiteSpace: "nowrap",
+            }}>
+              {rl.label}
+            </div>
+          ))}
+          {/* Ruler line */}
+          <div style={{
+            position: "absolute", bottom: 0, left: 0, right: 0,
+            height: 1, background: "rgba(255,255,255,0.06)",
+          }} />
+          {rulerLabels.map((rl, i) => (
+            <div key={i} style={{
+              position: "absolute", bottom: 0, left: `${rl.pct}%`,
+              width: 1, height: 4, background: "rgba(255,255,255,0.15)",
+            }} />
+          ))}
+        </div>
+      )}
+
+      {/* Lanes */}
+      {laneData.map((lane, li) => (
+        <div key={li} style={{ marginBottom: GAP }}>
+          <div style={{
+            fontSize: 9, color: lane.color, fontWeight: 700,
+            letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4, opacity: 0.85,
+          }}>
+            {lane.name}
+          </div>
+          <div style={{
+            position: "relative", height: LANE_H, borderRadius: 7,
+            background: "rgba(255,255,255,0.025)",
+            border: "1px solid rgba(255,255,255,0.06)",
+            overflow: "hidden",
+          }}>
+            {/* Ruler grid lines */}
+            {hasDates && rulerLabels.map((rl, i) => (
+              <div key={i} style={{
+                position: "absolute", left: `${rl.pct}%`, top: 0, bottom: 0,
+                width: 1, background: "rgba(255,255,255,0.04)", pointerEvents: "none",
+              }} />
+            ))}
+
+            {lane.segments.length === 0 ? (
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", paddingLeft: 12, color: "#2a2a2a", fontSize: 11 }}>
+                Add items below
+              </div>
+            ) : hasDates ? (
+              // Date-positioned absolute segments
+              lane.segments.map((seg, si) => {
+                const c = CAT_COLORS[seg.category] || CAT_COLORS.Other;
+                const positioned = seg.startDate && seg.endDate;
+                if (!positioned) return null;
+                return (
+                  <div key={si}
+                    title={`${seg.label} · ${seg.nights}n${seg.cash ? ` · $${fmt(seg.cash)}` : ""}${seg.pts ? ` · ${fmt(seg.pts)}pts` : ""}`}
+                    style={{
+                      position: "absolute",
+                      left: `${seg.leftPct}%`,
+                      width: `${seg.widthPct}%`,
+                      top: 3, bottom: 3,
+                      background: c.bg,
+                      borderLeft: `3px solid ${c.border}`,
+                      borderRadius: 5,
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                      padding: "0 6px", overflow: "hidden", boxSizing: "border-box",
+                    }}>
+                    <div style={{ color: c.text, fontSize: isMobile ? 9 : 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {seg.label}
+                    </div>
+                    <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {seg.nights}n{seg.cash > 0 ? ` · $${fmt(seg.cash)}` : ""}{seg.pts > 0 ? ` · ${fmt(seg.pts)}p` : ""}
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              // No dates — fallback sequential flex blocks
+              <div style={{ display: "flex", height: "100%" }}>
+                {lane.segments.map((seg, si) => {
+                  const c = CAT_COLORS[seg.category] || CAT_COLORS.Other;
+                  return (
+                    <div key={si} style={{
+                      flex: 1, background: c.bg,
+                      borderLeft: `3px solid ${c.border}`,
+                      borderRight: si < lane.segments.length - 1 ? "1px solid rgba(0,0,0,0.3)" : "none",
+                      display: "flex", flexDirection: "column", justifyContent: "center",
+                      padding: "0 7px", overflow: "hidden",
+                    }}>
+                      <div style={{ color: c.text, fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{seg.label}</div>
+                      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 8, whiteSpace: "nowrap" }}>
+                        {seg.cash > 0 ? `$${fmt(seg.cash)}` : ""}{seg.pts > 0 ? ` ${fmt(seg.pts)}p` : ""}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {/* Legend */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+        {CATEGORIES.map(cat => {
+          const c = CAT_COLORS[cat];
+          return (
+            <div key={cat} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: c.border, flexShrink: 0 }} />
+              <span style={{ color: "#383838", fontSize: 9, letterSpacing: 0.4 }}>{cat}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── POINTS BADGE ─────────────────────────────────────────────────────────────
+
+function PointsBadge({ brand }) {
+  const color = BRAND_COLOR_MAP[brand] || "#555";
+  if (!brand) return null;
+  return (
+    <span style={{
+      background: color, color: "#fff", fontSize: 10, fontWeight: 700,
+      padding: "2px 8px", borderRadius: 20, letterSpacing: 0.5, whiteSpace: "nowrap",
+    }}>{brand}</span>
+  );
+}
+
+// ─── ROW ──────────────────────────────────────────────────────────────────────
+
+function Row({ row, onChange, onDelete, isMobile }) {
+  const nights = rowNights(row);
+  const totalCash = rowCashTotal(row);
+  const totalPts = rowPtsTotal(row);
+  const hasTotal = totalCash > 0 || totalPts > 0;
+  const c = CAT_COLORS[row.category] || CAT_COLORS.Other;
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.04)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      borderLeft: `3px solid ${c.border}`,
+      borderRadius: 10, padding: "12px 12px 10px", marginBottom: 8,
+    }}>
+      {/* Line 1: label + category + delete */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <input
+          value={row.label}
+          onChange={(e) => onChange({ ...row, label: e.target.value })}
+          placeholder="Description"
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <select
+          value={row.category}
+          onChange={(e) => onChange({ ...row, category: e.target.value, brand: "" })}
+          style={{ ...inputStyle, width: isMobile ? 100 : 118, flexShrink: 0 }}
+        >
+          {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+        </select>
+        <button onClick={onDelete} style={{
+          background: "none", border: "none", color: "#444",
+          cursor: "pointer", fontSize: 20, padding: "0 2px", lineHeight: 1, flexShrink: 0,
+        }}>×</button>
+      </div>
+
+      {/* Line 2: dates */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: "#444", fontSize: 9, letterSpacing: 0.6, marginBottom: 3 }}>START</div>
+          <input
+            type="date"
+            value={row.startDate}
+            onChange={(e) => onChange({ ...row, startDate: e.target.value })}
+            style={{ ...inputStyle, fontSize: 12, colorScheme: "dark" }}
+          />
+        </div>
+        <div style={{ color: "#333", fontSize: 14, paddingTop: 14, flexShrink: 0 }}>→</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: "#444", fontSize: 9, letterSpacing: 0.6, marginBottom: 3 }}>END</div>
+          <input
+            type="date"
+            value={row.endDate}
+            onChange={(e) => onChange({ ...row, endDate: e.target.value })}
+            style={{ ...inputStyle, fontSize: 12, colorScheme: "dark" }}
+          />
+        </div>
+        {row.startDate && row.endDate && nights > 0 && (
+          <div style={{
+            flexShrink: 0, paddingTop: 14,
+            color: c.text, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+          }}>
+            {nights}n
+          </div>
+        )}
+      </div>
+
+      {/* Line 3: cash + points + brand */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: 1 }}>
+          <span style={prefixStyle}>$</span>
+          <input
+            value={row.cash}
+            onChange={(e) => onChange({ ...row, cash: e.target.value })}
+            placeholder="Cash/nt"
+            style={{ ...inputStyle, paddingLeft: 18 }}
+            type="number" min="0" inputMode="decimal"
+          />
+        </div>
+        <input
+          value={row.points}
+          onChange={(e) => onChange({ ...row, points: e.target.value })}
+          placeholder="Pts/nt"
+          style={{ ...inputStyle, flex: 1 }}
+          type="number" min="0" inputMode="numeric"
+        />
+        <select
+          value={row.brand}
+          onChange={(e) => onChange({ ...row, brand: e.target.value })}
+          style={{ ...inputStyle, width: isMobile ? 90 : 106, flexShrink: 0, fontSize: 11 }}
+        >
+          <option value="">Brand</option>
+          {(CAT_BRANDS[row.category] || CAT_BRANDS.Other).map(b => (
+            <option key={b.name} value={b.name}>{b.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Line 4: totals */}
+      {hasTotal && (
+        <div style={{
+          display: "flex", gap: 10, alignItems: "center",
+          marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)", flexWrap: "wrap",
+        }}>
+          <span style={{ color: "#444", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8 }}>Total</span>
+          {totalCash > 0 && <span style={{ color: "#a3e635", fontWeight: 700, fontSize: 13 }}>${fmt(totalCash)}</span>}
+          {totalPts > 0 && (
+            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              <PointsBadge brand={row.brand} />
+              <span style={{ color: "#67e8f9", fontWeight: 600, fontSize: 12 }}>{fmt(totalPts)} pts</span>
+            </div>
+          )}
+          {nights > 1 && <span style={{ color: "#3a3a3a", fontSize: 10, marginLeft: "auto" }}>× {nights} nights</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CATEGORY SUMMARY ─────────────────────────────────────────────────────────
+
+function CategorySummary({ rows }) {
+  const byCategory = {};
+  rows.forEach(r => {
+    const cat = r.category;
+    if (!byCategory[cat]) byCategory[cat] = { cash: 0, pts: {} };
+    byCategory[cat].cash += rowCashTotal(r);
+    const pts = rowPtsTotal(r);
+    if (pts > 0) {
+      const brand = r.brand || "Points";
+      byCategory[cat].pts[brand] = (byCategory[cat].pts[brand] || 0) + pts;
+    }
+  });
+  const active = Object.entries(byCategory).filter(([, v]) => v.cash > 0 || Object.keys(v.pts).length > 0);
+  if (active.length === 0) return null;
+  return (
+    <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {active.map(([cat, v]) => {
+        const c = CAT_COLORS[cat] || CAT_COLORS.Other;
+        return (
+          <div key={cat} style={{ background: c.bg, border: `1px solid ${c.border}33`, borderRadius: 8, padding: "6px 11px" }}>
+            <div style={{ color: c.text, fontSize: 9, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3, opacity: 0.7 }}>{cat}</div>
+            {v.cash > 0 && <div style={{ color: "#a3e635", fontWeight: 700, fontSize: 12 }}>${fmt(v.cash)}</div>}
+            {Object.entries(v.pts).map(([brand, pts]) => (
+              <div key={brand} style={{ color: "#67e8f9", fontSize: 11, fontWeight: 600 }}>
+                {fmt(pts)} <span style={{ color: "#444", fontWeight: 400 }}>{brand === "Points" ? "pts" : brand}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── TRIP GROUP ───────────────────────────────────────────────────────────────
+
+function TripGroup({ group, onChange, onDelete, isOnly, isMobile, laneColor }) {
+  const updateRow = (id, updated) =>
+    onChange({ ...group, rows: group.rows.map(r => r.id === id ? updated : r) });
+  const deleteRow = (id) =>
+    onChange({ ...group, rows: group.rows.filter(r => r.id !== id) });
+  const addRow = (category = "Other") =>
+    onChange({ ...group, rows: [...group.rows, defaultRow(category)] });
+
+  const totalCash = group.rows.reduce((s, r) => s + rowCashTotal(r), 0);
+  const totalPtsByBrand = {};
+  group.rows.forEach(r => {
+    const pts = rowPtsTotal(r);
+    if (pts > 0) {
+      const brand = r.brand || "Points";
+      totalPtsByBrand[brand] = (totalPtsByBrand[brand] || 0) + pts;
+    }
+  });
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.02)",
+      border: "1px solid rgba(255,255,255,0.09)",
+      borderTop: `2px solid ${laneColor}55`,
+      borderRadius: 14,
+      padding: isMobile ? "14px 12px" : "18px",
+      marginBottom: 16,
+    }}>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: laneColor, flexShrink: 0, boxShadow: `0 0 6px ${laneColor}` }} />
+          <input
+            value={group.name}
+            onChange={(e) => onChange({ ...group, name: e.target.value })}
+            style={{
+              ...inputStyle, fontSize: 15, fontWeight: 700,
+              background: "transparent", border: "none",
+              borderBottom: `1px solid ${laneColor}44`,
+              borderRadius: 0, color: "#f0f0f0", paddingLeft: 0, flex: 1,
+            }}
+          />
+          {!isOnly && (
+            <button onClick={onDelete} style={{
+              background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)",
+              color: "#ef4444", cursor: "pointer", fontSize: 11, padding: "4px 10px",
+              borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0,
+            }}>Remove</button>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          {totalCash > 0 && (
+            <div>
+              <span style={{ color: "#444", fontSize: 9, marginRight: 5, textTransform: "uppercase", letterSpacing: 0.8 }}>Cash</span>
+              <span style={{ color: "#a3e635", fontWeight: 800, fontSize: 17 }}>${fmt(totalCash)}</span>
+            </div>
+          )}
+          {Object.entries(totalPtsByBrand).map(([brand, pts]) => (
+            <div key={brand} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <PointsBadge brand={brand === "Points" ? "" : brand} />
+              <span style={{ color: "#67e8f9", fontWeight: 700, fontSize: 14 }}>{fmt(pts)} pts</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {group.rows.map(row => (
+        <Row key={row.id} row={row}
+          onChange={(updated) => updateRow(row.id, updated)}
+          onDelete={() => deleteRow(row.id)}
+          isMobile={isMobile}
+        />
+      ))}
+
+      <CategorySummary rows={group.rows} />
+
+      <div style={{ display: "flex", gap: 5, marginTop: 12, flexWrap: "wrap" }}>
+        {CATEGORIES.map(cat => (
+          <button key={cat} onClick={() => addRow(cat)} style={addBtnStyle}>+ {cat}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+
+const inputStyle = {
+  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 7, color: "#e5e5e5", fontSize: 13, padding: "7px 9px",
+  width: "100%", boxSizing: "border-box", outline: "none", WebkitAppearance: "none",
+};
+
+const prefixStyle = {
+  position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)",
+  color: "#555", fontSize: 13, pointerEvents: "none",
+};
+
+const addBtnStyle = {
+  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)",
+  color: "#666", cursor: "pointer", fontSize: 11, padding: "5px 11px",
+  borderRadius: 20, fontWeight: 500, fontFamily: "inherit",
+};
+
+// ─── PDF DOWNLOAD ─────────────────────────────────────────────────────────────
+
+function downloadPDF(groups, tripName) {
+  const allDates = [];
+  groups.forEach(g => g.rows.forEach(r => {
+    if (r.startDate) allDates.push(toDay(r.startDate));
+    if (r.endDate) allDates.push(toDay(r.endDate));
+  }));
+  const hasDates = allDates.length > 0;
+  const globalMin = hasDates ? Math.min(...allDates) : null;
+  const globalMax = hasDates ? Math.max(...allDates) : null;
+
+  const timelineHTML = groups.map((g, gi) => {
+    const color = GROUP_LANE_COLORS[gi % GROUP_LANE_COLORS.length];
+    const segments = g.rows.filter(r => r.label || r.startDate);
+    const segmentsHTML = segments.map(r => {
+      const c = CAT_COLORS[r.category] || CAT_COLORS.Other;
+      const nights = rowNights(r);
+      let leftPct = 0, widthPct = 100 / Math.max(segments.length, 1);
+      if (hasDates && r.startDate && r.endDate) {
+        const s = toDay(r.startDate), e = toDay(r.endDate);
+        leftPct = ((s - globalMin) / (globalMax - globalMin)) * 100;
+        widthPct = Math.max(((e - s) / (globalMax - globalMin)) * 100, 3);
+      }
+      return `<div style="position:absolute;left:${leftPct}%;width:${widthPct}%;top:3px;bottom:3px;background:${c.bg};border-left:3px solid ${c.border};border-radius:4px;padding:0 5px;box-sizing:border-box;overflow:hidden;">
+        <div style="color:${c.text};font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${r.label || r.category}</div>
+        <div style="color:rgba(255,255,255,0.4);font-size:8px;">${nights}n${rowCashTotal(r) > 0 ? ` · $${fmt(rowCashTotal(r))}` : ""}${rowPtsTotal(r) > 0 ? ` · ${fmt(rowPtsTotal(r))}p` : ""}</div>
+      </div>`;
+    }).join("");
+    return `
+      <div style="margin-bottom:8px;">
+        <div style="font-size:9px;color:${color};font-weight:700;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:3px;">${g.name}</div>
+        <div style="position:relative;height:44px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;overflow:hidden;">
+          ${segmentsHTML || '<div style="position:absolute;inset:0;display:flex;align-items:center;padding-left:10px;color:#333;font-size:10px;">—</div>'}
+        </div>
+      </div>`;
+  }).join("");
+
+  const groupsHTML = groups.map((g, gi) => {
+    const color = GROUP_LANE_COLORS[gi % GROUP_LANE_COLORS.length];
+    const totalCash = g.rows.reduce((s, r) => s + rowCashTotal(r), 0);
+    const ptsByBrand = {};
+    g.rows.forEach(r => {
+      const pts = rowPtsTotal(r);
+      if (pts > 0) { const b = r.brand || "Points"; ptsByBrand[b] = (ptsByBrand[b] || 0) + pts; }
+    });
+    const rowsHTML = g.rows.filter(r => r.label || rowCashTotal(r) || rowPtsTotal(r)).map(r => {
+      const nights = rowNights(r);
+      const c = CAT_COLORS[r.category] || CAT_COLORS.Other;
+      return `<tr>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:${c.text};font-size:11px;">${r.label || "—"}</td>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:#888;font-size:10px;">${r.category}</td>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:#aaa;font-size:10px;">${r.startDate || "—"}${r.endDate ? " → " + r.endDate : ""}</td>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:#aaa;font-size:10px;text-align:center;">${nights > 1 ? nights + "n" : "—"}</td>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:#a3e635;font-size:11px;text-align:right;">${rowCashTotal(r) > 0 ? "$" + fmt(rowCashTotal(r)) : "—"}</td>
+        <td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,0.06);color:#67e8f9;font-size:11px;text-align:right;">${rowPtsTotal(r) > 0 ? fmt(rowPtsTotal(r)) + " pts" : "—"}</td>
+      </tr>`;
+    }).join("");
+
+    return `
+      <div style="margin-bottom:20px;border:1px solid rgba(255,255,255,0.1);border-top:2px solid ${color}55;border-radius:10px;overflow:hidden;">
+        <div style="padding:12px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid rgba(255,255,255,0.07);">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <div style="width:8px;height:8px;border-radius:50%;background:${color};"></div>
+            <span style="color:#f0f0f0;font-weight:700;font-size:14px;">${g.name}</span>
+          </div>
+          <div style="display:flex;gap:16px;">
+            ${totalCash > 0 ? `<span style="color:#a3e635;font-weight:800;font-size:15px;">$${fmt(totalCash)} cash</span>` : ""}
+            ${Object.entries(ptsByBrand).map(([b, p]) => `<span style="color:#67e8f9;font-weight:700;font-size:13px;">${fmt(p)} ${b} pts</span>`).join("")}
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr style="background:rgba(255,255,255,0.03);">
+              <th style="padding:5px 8px;text-align:left;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Description</th>
+              <th style="padding:5px 8px;text-align:left;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Category</th>
+              <th style="padding:5px 8px;text-align:left;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Dates</th>
+              <th style="padding:5px 8px;text-align:center;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Nights</th>
+              <th style="padding:5px 8px;text-align:right;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Cash</th>
+              <th style="padding:5px 8px;text-align:right;color:#444;font-size:9px;letter-spacing:0.8px;text-transform:uppercase;">Points</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+      </div>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>${tripName} — Trip Plan</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0a; color: #e5e5e5; font-family: 'Courier New', monospace; padding: 32px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    @media print {
+      body { padding: 18px; }
+      @page { margin: 12mm; size: A4 landscape; }
+    }
+  </style>
+</head>
+<body>
+  <div style="margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.08);">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <div style="width:8px;height:8px;border-radius:50%;background:#a3e635;"></div>
+      <span style="color:#f5f5f5;font-size:20px;font-weight:800;letter-spacing:-0.5px;">${tripName}</span>
+    </div>
+    <div style="color:#555;font-size:9px;letter-spacing:1.5px;">TRIP PLANNER · DAKJEN CREATIVE</div>
+  </div>
+  <div style="margin-bottom:20px;background:#111;border:1px solid #222;border-radius:12px;padding:16px;">
+    <div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:12px;">Trip Timeline</div>
+    ${timelineHTML}
+  </div>
+  ${groupsHTML}
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${tripName.replace(/\s+/g, "-")}-trip-plan.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ─── TRIP TOTALS ──────────────────────────────────────────────────────────────
+
+function TripTotals({ groups, isMobile }) {
+  // Grand totals across ALL groups
+  let grandCash = 0;
+  const grandPtsByBrand = {};
+
+  groups.forEach(g => {
+    g.rows.forEach(r => {
+      grandCash += rowCashTotal(r);
+      const pts = rowPtsTotal(r);
+      if (pts > 0) {
+        const brand = r.brand || "Points";
+        grandPtsByBrand[brand] = (grandPtsByBrand[brand] || 0) + pts;
+      }
+    });
+  });
+
+  // Per-group totals for comparison
+  const groupTotals = groups.map((g, gi) => ({
+    name: g.name,
+    color: GROUP_LANE_COLORS[gi % GROUP_LANE_COLORS.length],
+    cash: g.rows.reduce((s, r) => s + rowCashTotal(r), 0),
+    ptsByBrand: g.rows.reduce((acc, r) => {
+      const pts = rowPtsTotal(r);
+      if (pts > 0) { const b = r.brand || "Points"; acc[b] = (acc[b] || 0) + pts; }
+      return acc;
+    }, {}),
+  }));
+
+  const hasSomething = grandCash > 0 || Object.keys(grandPtsByBrand).length > 0;
+  if (!hasSomething) return null;
+
+  return (
+    <div style={{
+      background: "rgba(163,230,53,0.04)",
+      border: "1px solid rgba(163,230,53,0.15)",
+      borderRadius: 14,
+      padding: isMobile ? "14px 14px" : "18px 20px",
+      marginBottom: 16,
+    }}>
+      {/* Grand total */}
+      <div style={{ marginBottom: groups.length > 1 ? 14 : 0 }}>
+        <div style={{ color: "#555", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.4, marginBottom: 8 }}>
+          Total Trip Cost
+        </div>
+        <div style={{ display: "flex", gap: isMobile ? 16 : 28, flexWrap: "wrap", alignItems: "baseline" }}>
+          {grandCash > 0 && (
+            <div>
+              <span style={{ color: "#444", fontSize: 10, marginRight: 6 }}>CASH</span>
+              <span style={{ color: "#a3e635", fontWeight: 900, fontSize: isMobile ? 24 : 30, letterSpacing: -1 }}>
+                ${fmt(grandCash)}
+              </span>
+            </div>
+          )}
+          {Object.entries(grandPtsByBrand).map(([brand, pts]) => (
+            <div key={brand} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <PointsBadge brand={brand === "Points" ? "" : brand} />
+              <span style={{ color: "#67e8f9", fontWeight: 900, fontSize: isMobile ? 20 : 26, letterSpacing: -0.5 }}>
+                {fmt(pts)}
+              </span>
+              <span style={{ color: "#444", fontSize: 11 }}>pts</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-group breakdown (only if 2+ groups) */}
+      {groups.length > 1 && (
+        <div style={{
+          paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)",
+          display: "flex", flexWrap: "wrap", gap: 10,
+        }}>
+          {groupTotals.map((gt, i) => (
+            <div key={i} style={{
+              background: "rgba(255,255,255,0.03)",
+              border: `1px solid ${gt.color}33`,
+              borderRadius: 8, padding: "7px 12px",
+              minWidth: 120,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: gt.color, flexShrink: 0 }} />
+                <span style={{ color: gt.color, fontSize: 10, fontWeight: 700, letterSpacing: 0.5 }}>{gt.name}</span>
+              </div>
+              {gt.cash > 0 && (
+                <div style={{ color: "#a3e635", fontWeight: 700, fontSize: 13 }}>${fmt(gt.cash)}</div>
+              )}
+              {Object.entries(gt.ptsByBrand).map(([brand, pts]) => (
+                <div key={brand} style={{ color: "#67e8f9", fontSize: 11, fontWeight: 600 }}>
+                  {fmt(pts)} <span style={{ color: "#444", fontWeight: 400, fontSize: 10 }}>{brand === "Points" ? "pts" : brand + " pts"}</span>
+                </div>
+              ))}
+              {gt.cash === 0 && Object.keys(gt.ptsByBrand).length === 0 && (
+                <div style={{ color: "#333", fontSize: 11 }}>—</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+
+const STORAGE_INDEX_KEY = "trip-planner-index";
+const tripStorageKey = (id) => `trip-planner-trip-${id}`;
+
+function TripListScreen({ onSelect, onNew, isMobile }) {
+  const [trips, setTrips] = useState(null); // null = loading
+  const [deleting, setDeleting] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_INDEX_KEY);
+        setTrips(raw ? JSON.parse(raw) : []);
+      } catch { setTrips([]); }
+    })();
+  }, []);
+
+  const handleDelete = async (trip) => {
+    setDeleting(trip.id);
+    try {
+      localStorage.removeItem(tripStorageKey(trip.id));
+      const next = trips.filter(t => t.id !== trip.id);
+      localStorage.setItem(STORAGE_INDEX_KEY, JSON.stringify(next));
+      setTrips(next);
+    } catch (e) { console.error(e); }
+    setDeleting(null);
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0a0a", color: "#e5e5e5",
+      fontFamily: "'DM Mono', 'Courier New', monospace",
+      padding: isMobile ? "20px 14px" : "32px 28px",
+      maxWidth: 700, margin: "0 auto", boxSizing: "border-box",
+    }}>
+      {/* Header */}
+      <div style={{ marginBottom: 28, paddingBottom: 16, borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#a3e635", boxShadow: "0 0 10px #a3e635" }} />
+          <span style={{ color: "#f5f5f5", fontSize: isMobile ? 18 : 22, fontWeight: 800, letterSpacing: -0.5 }}>
+            Trip Planner
+          </span>
+        </div>
+        <div style={{ color: "#2e2e2e", fontSize: 9, letterSpacing: 1.5 }}>DAKJEN CREATIVE · CASH + POINTS</div>
+      </div>
+
+      {/* New trip button */}
+      <button
+        onClick={onNew}
+        style={{
+          background: "rgba(163,230,53,0.08)", border: "1px dashed rgba(163,230,53,0.3)",
+          color: "#a3e635", cursor: "pointer", fontSize: 13, padding: "13px 20px",
+          borderRadius: 10, fontWeight: 700, fontFamily: "inherit", width: "100%",
+          letterSpacing: 0.5, marginBottom: 20,
+        }}
+      >+ New Trip</button>
+
+      {/* Trip list */}
+      {trips === null ? (
+        <div style={{ color: "#333", fontSize: 12, textAlign: "center", padding: 40 }}>Loading trips…</div>
+      ) : trips.length === 0 ? (
+        <div style={{ color: "#2a2a2a", fontSize: 12, textAlign: "center", padding: 40 }}>
+          No saved trips yet. Create one above.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {trips.map(t => (
+            <div key={t.id} style={{
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 10, padding: "13px 15px",
+              display: "flex", alignItems: "center", gap: 12,
+              cursor: "pointer",
+            }}
+              onClick={() => onSelect(t.id)}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: "#f0f0f0", fontWeight: 700, fontSize: 14, marginBottom: 3,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {t.name}
+                </div>
+                <div style={{ color: "#444", fontSize: 10 }}>
+                  {t.groupCount} group{t.groupCount !== 1 ? "s" : ""} ·{" "}
+                  {t.savedAt ? new Date(t.savedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "unsaved"}
+                </div>
+              </div>
+              {t.totalCash > 0 && (
+                <div style={{ color: "#a3e635", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                  ${fmt(t.totalCash)}
+                </div>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDelete(t); }}
+                disabled={deleting === t.id}
+                style={{
+                  background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
+                  color: deleting === t.id ? "#555" : "#ef4444",
+                  cursor: "pointer", fontSize: 11, padding: "4px 9px",
+                  borderRadius: 6, fontWeight: 600, flexShrink: 0, fontFamily: "inherit",
+                }}
+              >Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TripPlanner() {
+  const isMobile = useIsMobile();
+
+  // screen: "list" | "editor"
+  const [screen, setScreen] = useState("list");
+  const [activeTripId, setActiveTripId] = useState(null);
+  const [groups, setGroups] = useState([defaultGroup("Option A")]);
+  const [tripName, setTripName] = useState("New Trip");
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+
+  // ── Load trip into editor
+  const loadTrip = async (id) => {
+    try {
+      const raw = localStorage.getItem(tripStorageKey(id));
+      if (raw) {
+        const data = JSON.parse(raw);
+        setTripName(data.name);
+        setGroups(data.groups);
+        setActiveTripId(id);
+      }
+    } catch (e) { console.error(e); }
+    setScreen("editor");
+  };
+
+  // ── New trip
+  const newTrip = () => {
+    const id = uid();
+    setActiveTripId(id);
+    setTripName("New Trip");
+    setGroups([defaultGroup("Option A")]);
+    setSaveStatus("idle");
+    setScreen("editor");
+  };
+
+  // ── Save trip
+  const saveTrip = async () => {
+    setSaveStatus("saving");
+    try {
+      const id = activeTripId || uid();
+      if (!activeTripId) setActiveTripId(id);
+
+      const totalCash = groups.reduce((s, g) => s + g.rows.reduce((rs, r) => rs + rowCashTotal(r), 0), 0);
+      const tripData = { id, name: tripName, groups, savedAt: Date.now() };
+      localStorage.setItem(tripStorageKey(id), JSON.stringify(tripData));
+
+      // Update index
+      let index = [];
+      try {
+        const idxRaw = localStorage.getItem(STORAGE_INDEX_KEY);
+        if (idxRaw) index = JSON.parse(idxRaw);
+      } catch {}
+      const meta = { id, name: tripName, groupCount: groups.length, totalCash, savedAt: Date.now() };
+      const existing = index.findIndex(t => t.id === id);
+      if (existing >= 0) index[existing] = meta;
+      else index.unshift(meta);
+      localStorage.setItem(STORAGE_INDEX_KEY, JSON.stringify(index));
+
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch (e) {
+      console.error(e);
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  };
+
+  const updateGroup = useCallback(
+    (id, updated) => setGroups(gs => gs.map(g => g.id === id ? updated : g)), []
+  );
+  const deleteGroup = useCallback(
+    (id) => setGroups(gs => gs.filter(g => g.id !== id)), []
+  );
+  const addGroup = () =>
+    setGroups(gs => [...gs, defaultGroup(`Option ${String.fromCharCode(65 + gs.length)}`)]);
+
+  // ── List screen
+  if (screen === "list") {
+    return <TripListScreen
+      onSelect={loadTrip}
+      onNew={newTrip}
+      isMobile={isMobile}
+    />;
+  }
+
+  // ── Editor screen
+  const saveBtnLabel = saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "✓ Saved" : saveStatus === "error" ? "Error" : "Save";
+  const saveBtnColor = saveStatus === "saved" ? "#a3e635" : saveStatus === "error" ? "#ef4444" : "#67e8f9";
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0a0a", color: "#e5e5e5",
+      fontFamily: "'DM Mono', 'Courier New', monospace",
+      padding: isMobile ? "18px 12px" : "28px 24px",
+      maxWidth: 920, margin: "0 auto", boxSizing: "border-box",
+    }}>
+      {/* Header */}
+      <div style={{ marginBottom: 20, borderBottom: "1px solid rgba(255,255,255,0.07)", paddingBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          {/* Back */}
+          <button
+            onClick={() => setScreen("list")}
+            style={{
+              background: "none", border: "none", color: "#555", cursor: "pointer",
+              fontSize: 18, padding: "0 4px 0 0", lineHeight: 1, flexShrink: 0,
+            }}
+            title="All trips"
+          >←</button>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#a3e635", boxShadow: "0 0 10px #a3e635", flexShrink: 0 }} />
+          <input
+            value={tripName}
+            onChange={(e) => setTripName(e.target.value)}
+            style={{
+              background: "transparent", border: "none", color: "#f5f5f5",
+              fontSize: isMobile ? 16 : 21, fontWeight: 800, fontFamily: "inherit",
+              outline: "none", letterSpacing: -0.5, minWidth: 0, flex: 1,
+            }}
+          />
+          {/* Save */}
+          <button
+            onClick={saveTrip}
+            disabled={saveStatus === "saving"}
+            style={{
+              background: `rgba(103,232,249,0.08)`,
+              border: `1px solid ${saveBtnColor}55`,
+              color: saveBtnColor,
+              cursor: "pointer", fontSize: isMobile ? 11 : 12,
+              padding: isMobile ? "6px 10px" : "7px 14px",
+              borderRadius: 8, fontWeight: 700, fontFamily: "inherit",
+              letterSpacing: 0.3, flexShrink: 0, transition: "all 0.2s",
+            }}
+          >{saveBtnLabel}</button>
+          {/* PDF */}
+          <button
+            onClick={() => downloadPDF(groups, tripName)}
+            style={{
+              background: "rgba(163,230,53,0.08)", border: "1px solid rgba(163,230,53,0.25)",
+              color: "#a3e635", cursor: "pointer", fontSize: isMobile ? 11 : 12,
+              padding: isMobile ? "6px 10px" : "7px 14px",
+              borderRadius: 8, fontWeight: 700, fontFamily: "inherit",
+              letterSpacing: 0.3, flexShrink: 0, display: "flex", alignItems: "center", gap: 4,
+            }}
+          >
+            <span>↓</span><span>{isMobile ? "PDF" : "Export PDF"}</span>
+          </button>
+        </div>
+        <div style={{ color: "#2a2a2a", fontSize: 9, letterSpacing: 1.5 }}>
+          TRIP PLANNER · CASH + POINTS CALCULATOR
+        </div>
+      </div>
+
+      <TripTotals groups={groups} isMobile={isMobile} />
+      <Timeline groups={groups} isMobile={isMobile} />
+
+      {groups.map((g, gi) => (
+        <TripGroup
+          key={g.id}
+          group={g}
+          onChange={(updated) => updateGroup(g.id, updated)}
+          onDelete={() => deleteGroup(g.id)}
+          isOnly={groups.length === 1}
+          isMobile={isMobile}
+          laneColor={GROUP_LANE_COLORS[gi % GROUP_LANE_COLORS.length]}
+        />
+      ))}
+
+      <button onClick={addGroup} style={{
+        background: "rgba(163,230,53,0.05)", border: "1px dashed rgba(163,230,53,0.2)",
+        color: "#a3e635", cursor: "pointer", fontSize: 13, padding: "12px 20px",
+        borderRadius: 10, fontWeight: 700, fontFamily: "inherit", width: "100%", letterSpacing: 0.5,
+      }}>
+        + Add Comparison Group
+      </button>
+
+      <div style={{ color: "#1a1a1a", fontSize: 9, textAlign: "center", marginTop: 16, letterSpacing: 0.8 }}>
+        DAKJEN CREATIVE · TRIP PLANNER
+      </div>
+    </div>
+  );
+}
