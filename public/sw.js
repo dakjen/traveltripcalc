@@ -1,5 +1,5 @@
-const CACHE = "trip-planner-v4";
-const ASSETS = ["/", "/index.html", "/manifest.json"];
+const CACHE = "trip-planner-v5";
+const ASSETS = ["/", "/index.html", "/manifest.json", "/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
