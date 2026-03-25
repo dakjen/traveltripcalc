@@ -1,4 +1,4 @@
-const CACHE = "trip-planner-v1";
+const CACHE = "trip-planner-v2";
 const ASSETS = ["/", "/index.html", "/manifest.json"];
 
 self.addEventListener("install", e => {
